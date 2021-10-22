@@ -21,8 +21,10 @@ RUN apt-get -y -q update && \
     graphviz \
     dos2unix
 
-RUN wget https://raw.githubusercontent.com/technomancy/leiningen/stable/bin/lein && \
-    mv lein /usr/bin && \
+# RUN wget https://raw.githubusercontent.com/technomancy/leiningen/stable/bin/lein && \
+# Copy from local to prevent network error
+COPY ./lein ./ 
+RUN mv lein /usr/bin && \
     chmod +x /usr/bin/lein && \
     lein self-install
 
