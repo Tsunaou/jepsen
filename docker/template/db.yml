@@ -2,3 +2,8 @@
     << : *default-node
     container_name: jepsen-n%%N%%
     hostname: n%%N%%
+    ports:
+      - "22"
+      - "27017"
+      - "27018"
+      - "27019"

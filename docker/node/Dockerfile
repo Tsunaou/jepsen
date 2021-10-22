@@ -33,4 +33,7 @@ ENV DEBBASE_SSH enabled
 RUN apt-get install -qy build-essential bzip2 curl dnsutils faketime iproute2 iptables iputils-ping libzip4 logrotate man man-db net-tools ntpdate psmisc python rsyslog sudo tar unzip vim wget ca-certificates apt-utils
 
 EXPOSE 22
+EXPOSE 27017
+EXPOSE 27018
+EXPOSE 27019
 CMD ["/usr/local/bin/boot-debian-base"]
