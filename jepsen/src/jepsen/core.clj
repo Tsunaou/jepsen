@@ -173,8 +173,8 @@
   "Wraps body in DB setup and teardown."
   [test & body]
   `(try
-     (with-log-snarfing ~test
-       (db/cycle! ~test)
+     (with-log-snarfing ~test                               ;; 下载相关的日志
+       (db/cycle! ~test)                                    ;; 循环对数据库进行操作（实际上就是尝试一定的次数，每次都尝试对数据库进行搭建）
        ~@body)
      (finally
        (when-not (:leave-db-running? ~test)
@@ -185,9 +185,9 @@
   at the end of the test."
   [test & body]
   `(let [client#  (:client ~test)
-         nemesis# (nemesis/validate (:nemesis ~test))]
+         nemesis# (nemesis/validate (:nemesis ~test))]      ;; 意义不明，对nemesis进行了一次封装，方便进行错误处理等
     ; Setup
-    (let [nf# (future (nemesis/setup! nemesis# ~test))
+    (let [nf# (future (nemesis/setup! nemesis# ~test))      ;; TODO: 为什么要用future：我猜测是可以直接开启一次并发的操作
                clients# (real-pmap (fn [node#]
                                      (with-thread-name
                                        (str "jepsen node " node#)
@@ -197,7 +197,7 @@
                                    (:nodes ~test))
                nf# @nf#]
       (try
-        (dorun clients#)
+        (dorun clients#)                                    ;; 强制执行clients集合中的函数（因为此时clients#返回的是一个lazy sequence）
         ~@body
         (finally
           ; Teardown (and close clients)
@@ -282,9 +282,9 @@
   the binding expression, and evaluates body."
   [[test' test] & body]
   `(let [test# ~test]
-     (control/with-remote (:remote test#)
-       (control/with-ssh (:ssh test#)
-         (with-resources [sessions#
+     (control/with-remote (:remote test#)                   ;; 动态绑定test中的remote为新建的一个remote（用于远程执行各种ssh命令）
+       (control/with-ssh (:ssh test#)                       ;; 动态绑定ssh参数
+         (with-resources [sessions#                         ;; 通过with-resources，在test中构造:sessions，维护每个和每个node的ssh连接
                           (bound-fn* control/session)
                           control/disconnect
                           (:nodes test#)]
@@ -323,7 +323,7 @@
     (not (:barrier test)) (assoc :barrier
                                  (let [c (count (:nodes test))]
                                    (if (pos? c)
-                                     (CyclicBarrier. (count (:nodes test)))
+                                     (CyclicBarrier. (count (:nodes test))) ;; TODO: CyclicBarrier的意思
                                      ::no-barrier)))))
 
 (defn run!
@@ -338,18 +338,18 @@
     :port               SSH listening port (22)
     :private-key-path   A path to an SSH identity file (~/.ssh/id_rsa)
     :strict-host-key-checking  Whether or not to verify host keys
-  :logging    Logging options; see jepsen.store/start-logging!
+  :logging    Logging options; see jepsen.store/start-logging! // TODO:
   :os         The operating system; given by the OS protocol
   :db         The database to configure: given by the DB protocol
-  :remote     The remote to use for control actions. Try, for example,
+  :remote     The remote to use for control actions. Try, for example, // TODO:
               (jepsen.control.sshj/remote).
   :client     A client for the database
   :nemesis    A client for failures
   :generator  A generator of operations to apply to the DB
   :checker    Verifies that the history is valid
-  :log-files  A list of paths to logfiles/dirs which should be captured at
+  :log-files  A list of paths to logfiles/dirs which should be captured at // TODO:
               the end of the test.
-  :nonserializable-keys   A collection of top-level keys in the test which
+  :nonserializable-keys   A collection of top-level keys in the test which // TODO:
                           shouldn't be serialized to disk.
   :leave-db-running? Whether to leave the DB running at the end of the test.
 
@@ -382,19 +382,19 @@
   [test]
   (try
     (with-thread-name "jepsen test runner"
-      (let [test (prepare-test test)]
-        (with-logging test
-          (let [test (with-sessions [test test]
+      (let [test (prepare-test test)]                       ;; 完成:start-time, :concurrency, :barrier的预先设置（如果没有设置的话）
+        (with-logging test                                  ;; log相关的操作 TODO:
+          (let [test (with-sessions [test test]             ;; 在test中构造:sessions，维护和每个node的ssh连接
                        ; Launch OS, DBs, evaluate test
-                       (let [test (with-os test
-                                    (with-db test
+                       (let [test (with-os test             ;; 开启每个OS的构造工作
+                                    (with-db test           ;; 构建待测数据库
                                       (util/with-relative-time
                                         ; Run a single case
                                         (-> test
-                                            (assoc :history (run-case! test))
+                                            (assoc :history (run-case! test)) ;; 指定对应的操作
                                             ; Remove state
                                             (dissoc :barrier :sessions)))))]
                          (info "Run complete, writing")
-                         (when (:name test) (store/save-1! test))
-                         (analyze! test)))]
-            (log-results test)))))))
+                         (when (:name test) (store/save-1! test)) ;; 存储history.edn, history.txt和test.fressian等
+                         (analyze! test)))]                 ;; 对history进行分析（即调用checker）
+            (log-results test)))))))                        ;; 存储测试结果
