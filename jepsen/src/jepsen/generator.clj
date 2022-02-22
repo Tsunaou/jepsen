@@ -380,12 +380,12 @@
   (:import (io.lacuna.bifurcan Set)))
 
 (defprotocol Generator
-  (update [gen test context event]
+  (update [gen test context event]                          ;; 更新generator的状态，指示某个事件已经发生，并且返回一个generator
           "Updates the generator to reflect an event having taken place.
           Returns a generator (presumably, `gen`, perhaps with some changes)
           resulting from the update.")
 
-  (op [gen test context]
+  (op [gen test context]                                    ;; 返回一个当前generator的下一个操作
       "Obtains the next operation from this generator. Returns an pair
       of [op gen'], or [:pending gen], or nil if this generator is exhausted."))
 
@@ -435,7 +435,7 @@
       (tagged-literal 'unprintable (str gen))
       )))
 
-;; Fair sets
+;; Fair sets TODO: 公平的调度算法
 ;
 ; Our contexts need a set of free threads which supports an efficient way of
 ; getting a single thread. An easy solution is to use `first` to get the first
@@ -453,12 +453,12 @@
 (defn context
   "Constructs a new context from a test."
   [test]
-  (let [threads (->> (range (:concurrency test))
+  (let [threads (->> (range (:concurrency test))            ;;  (:nemesis 0 1 2 ... n)
                      (cons :nemesis))
-        threads (.forked (Set/from ^Iterable threads))]
+        threads (.forked (Set/from ^Iterable threads))]     ;; 转为Set，那么就为每个client和:nemesis创建了一个对应的线程
     {:time          0
      :free-threads  threads
-     :workers       (->> threads
+     :workers       (->> threads                            ;; TODO: 暂时意义不明，但是形式是类似于 {0 0, 7 7, 1 1, 4 4, 6 6, :nemesis :nemesis, 3 3, 2 2, 9 9, 5 5, 8 8}
                          (c/map (partial c/repeat 2))
                          (c/map vec)
                          (into {}))}))
@@ -483,7 +483,7 @@
   (let [free-threads ^Set (:free-threads context)
         n                 (.size free-threads)]
     (when-not (zero? n)
-      (let [thread (.nth free-threads (rand-int n))]
+      (let [thread (.nth free-threads (rand-int n))]        ;; 防止进程饥饿
         (get (:workers context) thread)))))
 
 (defn all-processes
@@ -542,7 +542,7 @@
         (nil? (:type op))     (assoc! :type :invoke)))
     :pending))
 
-(extend-protocol Generator
+(extend-protocol Generator                                  ;;让特定类型的天然支持generator方法，例如nil PersistentMap, Sequence, Function等
   nil
   (update [gen test ctx event] nil)
   (op [this test ctx] nil)

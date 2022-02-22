@@ -16,7 +16,7 @@
            (io.lacuna.bifurcan Set)))
 
 
-(defprotocol Worker
+(defprotocol Worker                                         ;; 负责执行client操作的工作进程
   "This protocol allows the interpreter to manage the lifecycle of stateful
   workers. All operations on a Worker are guaranteed to be executed by a single
   thread."
@@ -30,22 +30,22 @@
   (close! [this test]
           "Closes this worker, releasing any resources it may hold."))
 
-(deftype ClientWorker [node
-                       ^:unsynchronized-mutable process
-                       ^:unsynchronized-mutable client]
+(deftype ClientWorker [node                                 ;; 绑定到某个特定节点
+                       ^:unsynchronized-mutable process     ;; 负责的线程
+                       ^:unsynchronized-mutable client]     ;; 绑定的client
   Worker
   (open [this test id]
     this)
 
   (invoke! [this test op]
-    (if (and (not= process (:process op))
-             (not (client/is-reusable? client test)))
+    (if (and (not= process (:process op))                   ;; process号不一致，说明发生了:info，那么就得重新开启一个client
+             (not (client/is-reusable? client test)))       ;; client不可复用
       ; New process, new client!
       (do (close! this test)
           ; Try to open new client
           (let [err (try
                       (set! (.client this)
-                            (client/open! (client/validate (:client test))
+                            (client/open! (client/validate (:client test)) ;; 重新开启一个client来执行操作
                                           test node))
                       (set! (.process this) (:process op))
                      nil
@@ -101,6 +101,8 @@
   given worker. Takes a test, a Queue which should receive completion
   operations, a Worker object, and a worker id.
 
+  创建一个沟通的信道，并且对给定worker创建一个worker线程。输入参数为test，接受完成操作的队列completion，一个Worker对象，以及worker的id
+
   Returns a map with:
 
     :id       The worker ID
@@ -109,14 +111,14 @@
   [test ^ArrayBlockingQueue out worker id]
   (let [in          (ArrayBlockingQueue. 1)
         fut
-        (future
+        (future                                             ;; 一个future对象，用于接收worker操作的返回值
           (util/with-thread-name (str "jepsen worker "
                                       (util/name+ id))
             (let [worker (open worker test id)]
               (try
                 (loop []
-                  (when
-                    (let [op (.take in)]
+                  (when                                     ;; 一直循环，直到in中得到的操作的:type为:exit
+                    (let [op (.take in)]                    ;; 如果操作队列中有一个元素
                       (try
                         (case (:type op)
                           ; We're done here
@@ -192,27 +194,27 @@
   extends the Generator protocol over some dynamic classes like (promise)."
   [test]
   (gen/init!)
-  (let [ctx         (gen/context test)
-        worker-ids  (gen/all-threads ctx)
-        completions (ArrayBlockingQueue. (count worker-ids))
-        workers     (mapv (partial spawn-worker test completions
+  (let [ctx         (gen/context test)                      ;; 构建测试的上下文，包括:time, :free-threads, :workers
+        worker-ids  (gen/all-threads ctx)                   ;; 各个worker的编号
+        completions (ArrayBlockingQueue. (count worker-ids));; 完成的操作，并发安全的一个队列
+        workers     (mapv (partial spawn-worker test completions ;; 为每个worker创建一个Worker对象，返回{:worker-id, :future, :in}，其中:in是接受操作的一个队列
                                    (client-nemesis-worker))
                                    worker-ids)
-        invocations (into {} (map (juxt :id :in) workers))
+        invocations (into {} (map (juxt :id :in) workers))  ;; ((juxt :id :in) worker) => [(:id worker) (:in worker)]
         gen         (->> (:generator test)
-                         gen/friendly-exceptions
-                         gen/validate)]
+                         gen/friendly-exceptions            ;; 加入异常处理
+                         gen/validate)]                     ;; 检验generator生成的操作是否合法
     (try+
       (loop [ctx            ctx
              gen            gen
-             outstanding    0     ; Number of in-flight ops
+             outstanding    0     ; Number of in-flight ops 未完成的操作数量
              ; How long to poll on the completion queue, in micros.
              poll-timeout   0
              history        (transient [])]
         ; First, can we complete an operation? We want to get to these first
         ; because they're latency sensitive--if we wait, we introduce false
         ; concurrency.
-        (if-let [op' (.poll completions poll-timeout TimeUnit/MICROSECONDS)]
+        (if-let [op' (.poll completions poll-timeout TimeUnit/MICROSECONDS)] ;; if completions有新操作，则取出处理，否则执行
           (let [;_      (prn :completed op')
                 thread (gen/process->thread ctx (:process op'))
                 time    (util/relative-time-nanos)
@@ -221,51 +223,51 @@
                 ; Update context with new time and thread being free
                 ctx     (assoc ctx
                               :time         time
-                              :free-threads (.add ^Set (:free-threads ctx)
+                              :free-threads (.add ^Set (:free-threads ctx) ;; 有操作完成了，将当前线程加入空闲的线程
                                                   thread))
                 ; Let generator know about our completion. We use the context
                 ; with the new time and thread free, but *don't* assign a new
                 ; process here, so that thread->process recovers the right
                 ; value for this event.
-                gen     (gen/update gen test ctx op')
+                gen     (gen/update gen test ctx op')       ;; 让generator知道当前的操作已经完成了
                 ; Threads that crash (other than the nemesis) should be assigned
                 ; new process identifiers.
                 ctx     (if (or (= :nemesis thread) (not= :info (:type op')))
                           ctx
-                          (update ctx :workers assoc thread
+                          (update ctx :workers assoc thread ;; 如果有client的线程操作失败了，那么将会更新新的标记（但是实际上线程还是同样的）
                                   (gen/next-process ctx thread)))
                 history (if (goes-in-history? op')
                           (conj! history op')
                           history)]
             ; Log completion in history and move on!
-            (recur ctx gen (dec outstanding) 0 history))
+            (recur ctx gen (dec outstanding) 0 history))    ;; 继续循环，此时将outstanding-1，表示已经有一个操作完成了
 
           ; There's nothing to complete; let's see what the generator's up to
-          (let [time        (util/relative-time-nanos)
+          (let [time        (util/relative-time-nanos)      ;; 当前的时间
                 ctx         (assoc ctx :time time)
                 ;_ (prn :asking-for-op)
                 ;_ (binding [*print-length* 12] (pprint gen))
-                [op gen']   (gen/op gen test ctx)]
+                [op gen']   (gen/op gen test ctx)]          ;; 生成对应的操作，并返回gen'
                 ;_ (prn :time time :got op)]
             (condp = op
               ; We're exhausted, but workers might still be going.
-              nil (if (pos? outstanding)
+              nil (if (pos? outstanding)                    ;; 如果还有操作未完成
                     ; Still waiting on workers
-                    (recur ctx gen outstanding (long max-pending-interval)
+                    (recur ctx gen outstanding (long max-pending-interval) ;; 相当于clojure的goto语句，重新进行循环
                            history)
                     ; Good, we're done. Tell workers to exit...
                     (do (doseq [[thread queue] invocations]
-                          (.put ^ArrayBlockingQueue queue {:type :exit}))
+                          (.put ^ArrayBlockingQueue queue {:type :exit})) ;; 已经没有未完成的操作了，就向各个worker的in中发送:exit命令
                         ; Wait for exit
-                        (dorun (map (comp deref :future) workers))
-                        (persistent! history)))
+                        (dorun (map (comp deref :future) workers)) ;; 等待worker结束运行
+                        (persistent! history)))             ;; 持久化history
 
               ; Nothing we can do right now. Let's try to complete something.
               :pending (recur ctx gen outstanding (long max-pending-interval)
                               history)
 
-              ; Good, we've got an invocation.
-              (if (< time (:time op))
+              ; Good, we've got an invocation. 是一次可以执行的操作
+              (if (< time (:time op))                       ;; TODO: 当前时间小于op的时间（为什么会这样？）
                 ; Can't evaluate this op yet!
                 (do ;(prn :waiting (util/nanos->secs (- (:time op) time)) "s")
                     (recur ctx gen outstanding
@@ -275,9 +277,9 @@
                            history))
 
                 ; Good, we can run this.
-                (let [thread (gen/process->thread ctx (:process op))
+                (let [thread (gen/process->thread ctx (:process op)) ;; 获取op对应的thread
                       ; Dispatch it to a worker as quick as we can
-                      _ (.put ^ArrayBlockingQueue (get invocations thread) op)
+                      _ (.put ^ArrayBlockingQueue (get invocations thread) op) ;; 将操作放到对应的worker的in队列
                       ; Update our context to reflect
                       ctx (assoc ctx
                                  :time (:time op) ; Use time instead?
@@ -285,13 +287,13 @@
                                                  ^Set (:free-threads ctx)
                                                  thread))
                       ; Let the generator know about the invocation
-                      gen' (gen/update gen' test ctx op)
-                      history (if (goes-in-history? op)
+                      gen' (gen/update gen' test ctx op)    ;; 更新操作的执行状态
+                      history (if (goes-in-history? op)     ;; 是否应该被记录在history中
                                 (conj! history op)
                                 history)]
-                  (recur ctx gen' (inc outstanding) 0 history)))))))
+                  (recur ctx gen' (inc outstanding) 0 history))))))) ;; 继续循环，同时增加outstanding，标记目前有一个操作正在被执行中
 
-      (catch Throwable t
+      (catch Throwable t                                    ;; TODO 异常处理，先跳过
         ; We've thrown, but we still need to ensure the workers exit.
         (info "Shutting down workers after abnormal exit")
         ; We only try to cancel each worker *once*--if we try to cancel
@@ -305,6 +307,6 @@
             (let [{:keys [in future] :as worker} (first unfinished)]
               (if (future-done? future)
                 (recur (next unfinished))
-                (do (.offer ^java.util.Queue in {:type :exit})
+                (do (.offer ^java.util.Queue in {:type :exit}) ;; 异常处理
                     (recur unfinished))))))
         (throw t)))))
